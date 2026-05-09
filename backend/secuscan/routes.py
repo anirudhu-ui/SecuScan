@@ -96,7 +96,7 @@ async def get_or_set_cached(key: str, builder):
 async def invalidate_view_cache():
     """Clear aggregate caches after writes."""
     cache = await get_cache()
-    for prefix in ["summary:", "assets:", "findings:", "surface:", "reports:", "tasks:"]:
+    for prefix in ["summary:", "findings:", "reports:", "tasks:"]:
         await cache.delete_prefix(prefix)
 
 
@@ -449,16 +449,8 @@ async def get_dashboard_summary():
         db = await get_db()
         
         # Get data
-        raw_assets = await db.fetchall("SELECT * FROM assets ORDER BY updated_at DESC")
-        assets = parse_json_fields(raw_assets, ["open_ports", "technologies", "services", "metadata_json"])
-        
         raw_findings = await db.fetchall("SELECT * FROM findings ORDER BY discovered_at DESC")
         findings = parse_json_fields(raw_findings, ["metadata_json"])
-        
-        raw_atks = await db.fetchall(
-            "SELECT * FROM attack_surface_entries ORDER BY last_seen DESC"
-        )
-        attack_surface = parse_json_fields(raw_atks, ["metadata_json"])
         
         task_stats = await db.fetchone(
             """
@@ -482,36 +474,18 @@ async def get_dashboard_summary():
                              for item in findings)
 
         recent_findings: List[Dict] = findings[:5]
-        # Filter out assets with 'scanning' status to avoid duplicate UI entries with Task Activity
-        active_assets_list = [item for item in assets if item.get("status") != "scanning"]
-        
-        high_risk_assets = [item for item in active_assets_list if item.get("risk_level") in {"critical", "high"}]
-        has_real_risk = len(high_risk_assets) > 0
-        if not has_real_risk:
-            high_risk_assets = active_assets_list[:5]
+        recent_findings: List[Dict] = findings[:5]
 
         return {
-            "total_assets": len(assets),
-            "active_assets": sum(bool(item.get("status") == "active")
-                             for item in assets),
-            "critical_assets": sum(bool(item.get("risk_level") == "critical")
-                               for item in assets),
-            "total_attack_surface": len(attack_surface),
             "total_findings": len(findings),
             "critical_findings": critical_findings,
             "high_findings": high_findings,
             "medium_findings": medium_findings,
             "low_findings": low_findings,
             "info_findings": info_findings,
-            "last_scan_time": assets[0].get("last_scanned") if assets else None,
+            "last_scan_time": findings[0].get("discovered_at") if findings else None,
             "recent_findings": recent_findings,
-            "has_high_risk_assets": has_real_risk,
-            "high_risk_assets": high_risk_assets,
-            "attack_surface_by_category": {
-                str(item.get("category", "unknown")): sum(bool(x.get("category") == item.get("category"))
-                                                      for x in attack_surface)
-                for item in attack_surface
-            },
+            "recent_findings": recent_findings,
             "scan_activity": {
                 "total": int(task_stats["total"]) if task_stats and task_stats.get("total") is not None else 0,
                 "completed": int(task_stats["completed"]) if task_stats and task_stats.get("completed") is not None else 0,
@@ -534,18 +508,6 @@ async def get_dashboard_summary():
     return await build()
 
 
-@router.get("/assets")
-async def get_assets():
-    """Return discovered assets."""
-
-    async def build():
-        db = await get_db()
-        rows = await db.fetchall("SELECT * FROM assets WHERE status != 'scanning' ORDER BY updated_at DESC")
-        return {"assets": parse_json_fields(rows, ["open_ports", "technologies", "services", "metadata_json"])}
-
-    return await get_or_set_cached("assets:list", build)
-
-
 @router.get("/findings")
 async def get_findings():
     """Return vulnerability findings."""
@@ -556,20 +518,6 @@ async def get_findings():
         return {"findings": parse_json_fields(rows, ["metadata_json"])}
 
     return await get_or_set_cached("findings:list", build)
-
-
-@router.get("/attack-surface")
-async def get_attack_surface():
-    """Return attack surface entries."""
-
-    async def build():
-        db = await get_db()
-        rows = await db.fetchall(
-            "SELECT * FROM attack_surface_entries ORDER BY last_seen DESC"
-        )
-        return {"entries": rows}
-
-    return await get_or_set_cached("surface:list", build)
 
 
 @router.get("/reports")
@@ -721,8 +669,7 @@ async def clear_all_tasks():
         await delete_task_records(task_ids)
 
     # Purge other tables
-    await db.execute("DELETE FROM assets")
-    await db.execute("DELETE FROM attack_surface_entries")
+    await db.execute("DELETE FROM findings")
     
     # Fallback cleanup for any orphaned files in data directories
     for subdir in ["raw", "reports"]:
@@ -965,3 +912,59 @@ async def get_finding_details(finding_id: str):
         "discovered_at": finding_row["discovered_at"],
         "metadata": metadata
     }
+
+
+@router.get("/attack-surface")
+async def get_attack_surface():
+    """Return an aggregated view of the monitored attack surface."""
+    db = await get_db()
+    
+    # We aggregate unique targets from tasks and findings
+    tasks = await db.fetchall("SELECT DISTINCT target, tool_name, created_at FROM tasks ORDER BY created_at DESC")
+    findings = await db.fetchall("SELECT DISTINCT target, category, severity, discovered_at FROM findings ORDER BY discovered_at DESC")
+    
+    entries = []
+    seen_targets = set()
+    
+    # Add findings as high-priority surface entries
+    for f in findings:
+        target = f["target"]
+        if target not in seen_targets:
+            entries.append({
+                "id": str(uuid.uuid4()),
+                "category": f["category"],
+                "item": target,
+                "details": f"Active exposure identified in {f['category']}",
+                "risk": f["severity"],
+                "source": "Audit Scan",
+                "last_seen": f["discovered_at"]
+            })
+            seen_targets.add(target)
+            
+    # Add other scanned targets
+    for t in tasks:
+        target = t["target"]
+        if target not in seen_targets:
+            entries.append({
+                "id": str(uuid.uuid4()),
+                "category": "Infrastructure",
+                "item": target,
+                "details": f"Monitored via {t['tool_name']}",
+                "risk": "info",
+                "source": "Recon",
+                "last_seen": t["created_at"]
+            })
+            seen_targets.add(target)
+            
+    return {"entries": entries}
+
+
+@router.get("/assets")
+async def get_assets():
+    """Return a list of tracked assets."""
+    db = await get_db()
+    # For now, we use unique targets as assets
+    rows = await db.fetchall("SELECT DISTINCT target FROM tasks UNION SELECT DISTINCT target FROM findings")
+    assets = [{"id": str(uuid.uuid4()), "name": row["target"]} for row in rows]
+    return {"assets": assets}
+

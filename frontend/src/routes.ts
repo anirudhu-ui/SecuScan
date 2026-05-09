@@ -1,6 +1,5 @@
 export const routes = {
   dashboard: '/',
-  assets: '/assets',
   toolkit: '/toolkit',
   scanTool: '/toolkit/:toolId',
   findings: '/findings',
@@ -14,4 +13,3 @@ export const routePath = {
   scanTool: (toolId: string) => `${routes.toolkit}/${encodeURIComponent(toolId)}`,
   task: (taskId: string) => `/task/${encodeURIComponent(taskId)}`,
 } as const
-

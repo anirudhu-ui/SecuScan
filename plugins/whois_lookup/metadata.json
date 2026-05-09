@@ -4,19 +4,20 @@
   "version": "1.0.0",
   "description": "Domain registration information lookup",
   "long_description": "WHOIS is a query and response protocol that is widely used for querying databases that store the registered users or assignees of an Internet resource, such as a domain name, an IP address block, or an autonomous system.",
-  "category": "recon",
+  "category": "utils",
   "author": {
     "name": "SecuScan Contributors",
-    "email": "dev@secuscan.local"
+    "email": "dev@secuscan.in"
   },
   "license": "MIT",
   "icon": "\ud83d\udd0e",
   "engine": {
     "type": "cli",
-    "binary": "whois"
+    "binary": "python3"
   },
   "command_template": [
-    "whois",
+    "python3",
+    "plugins/whois_lookup/whois_tool.py",
     "{target}"
   ],
   "fields": [
@@ -50,14 +51,12 @@
     "tutorial_url": "https://docs.secuscan.local/plugins/whois_lookup"
   },
   "dependencies": {
-    "binaries": [
-      "whois"
+    "binaries": [],
+    "python_packages": [
+      "python-whois"
     ],
-    "python_packages": [],
-    "system_packages": [
-      "whois"
-    ]
+    "system_packages": []
   },
   "docker_image": "alpine:latest",
-  "checksum": "6df3bdd7ba4824965b67d30d8a4fd688d8242b508ab37188cb5b7c4eed702311"
+  "checksum": "2280d0cdd9e59fb8dcc2ae42228fbfe319dfb853bf4f6271844ce9243a4fc360"
 }

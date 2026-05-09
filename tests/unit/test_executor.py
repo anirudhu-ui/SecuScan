@@ -63,3 +63,58 @@ def test_parse_results_falls_back_to_stdout_when_report_missing(setup_test_envir
     result = executor._parse_results(plugin, stdout_json)
     assert result["count"] == 1
     assert "stdout.py" in result["findings"][0]["title"]
+
+
+def test_icmp_ping_parser_summarizes_full_packet_loss(setup_test_environment):
+    manager = _ensure_plugins_loaded()
+    plugin = manager.get_plugin("icmp_ping")
+    assert plugin is not None
+
+    executor = TaskExecutor()
+    output = """PING 192.168.1.1 (192.168.1.1): 56 data bytes
+Request timeout for icmp_seq 0
+76 bytes from 115.247.228.233: Communication prohibited by filter
+
+--- 192.168.1.1 ping statistics ---
+7 packets transmitted, 0 packets received, 100.0% packet loss
+"""
+
+    result = executor._parse_results(plugin, output)
+
+    assert result["count"] == 1
+    assert result["findings"][0]["title"] == "No ICMP Response: 192.168.1.1"
+    assert result["findings"][0]["severity"] == "info"
+    assert result["metrics"]["packet_loss_percent"] == 100.0
+    assert result["metrics"]["filtered"] is True
+
+
+def test_classify_command_result_allows_nonfatal_ping_exit_with_statistics(setup_test_environment):
+    manager = _ensure_plugins_loaded()
+    plugin = manager.get_plugin("icmp_ping")
+    assert plugin is not None
+
+    executor = TaskExecutor()
+    status, error = executor._classify_command_result(
+        plugin=plugin,
+        output="--- 192.168.1.1 ping statistics ---\n7 packets transmitted, 0 packets received, 100.0% packet loss\n",
+        exit_code=2,
+    )
+
+    assert status == "completed"
+    assert error is None
+
+
+def test_classify_command_result_keeps_real_ping_execution_errors_failed(setup_test_environment):
+    manager = _ensure_plugins_loaded()
+    plugin = manager.get_plugin("icmp_ping")
+    assert plugin is not None
+
+    executor = TaskExecutor()
+    status, error = executor._classify_command_result(
+        plugin=plugin,
+        output="ping: cannot resolve definitely-not-a-host: Unknown host\n",
+        exit_code=2,
+    )
+
+    assert status == "failed"
+    assert error is not None

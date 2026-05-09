@@ -4,21 +4,25 @@ import { motion } from 'framer-motion'
 interface ExecutiveStatsBarProps {
   riskLabel: string
   criticalVulns: number
-  totalAssets: number
-  attackSurface: number
+  totalFindings: number
+  scanActivity: number
   compliancePercent: number
   riskNote?: string
 }
 
 export const ExecutiveStatsBar: React.FC<ExecutiveStatsBarProps> = ({
-  riskLabel,
-  criticalVulns,
-  totalAssets,
-  attackSurface,
-  compliancePercent,
+  riskLabel = 'Moderate',
+  criticalVulns = 0,
+  totalFindings = 0,
+  scanActivity = 0,
+  compliancePercent = 100,
   riskNote = 'Risk exposure has increased by 12% following recent network expansion.'
 }) => {
-  const hasCritical = criticalVulns > 0
+  const criticalCount = Number.isFinite(criticalVulns) ? criticalVulns : 0
+  const findingCount = Number.isFinite(totalFindings) ? totalFindings : 0
+  const scanCount = Number.isFinite(scanActivity) ? scanActivity : 0
+  const compliance = Number.isFinite(compliancePercent) ? compliancePercent : 100
+  const hasCritical = criticalCount > 0
 
   return (
     <div className="w-full bg-[var(--bg-secondary)] border-y border-white/5 py-16 grid grid-cols-1 md:grid-cols-4 divide-x divide-white/5">
@@ -46,7 +50,7 @@ export const ExecutiveStatsBar: React.FC<ExecutiveStatsBarProps> = ({
             className={`text-8xl font-normal leading-[0.8] block ${hasCritical ? 'text-[var(--rag-red)]' : 'text-white'}`}
             style={{ fontFamily: 'var(--font-display)' }}
           >
-            {criticalVulns}
+            {criticalCount}
           </span>
           <span className={`text-xs font-bold uppercase tracking-[0.25em] block ${hasCritical ? 'text-[var(--rag-red)]' : 'text-[var(--rag-green)]'}`}>
             {hasCritical ? 'ATTENTION REQUIRED' : 'NO CRITICAL FINDINGS'}
@@ -54,25 +58,25 @@ export const ExecutiveStatsBar: React.FC<ExecutiveStatsBarProps> = ({
         </div>
       </div>
 
-      {/* 3. Total Assets */}
+      {/* 3. Total Findings */}
       <div className="px-6">
-        <span className="text-xs font-bold text-white/70 uppercase tracking-[0.3em] block mb-6">Total Assets</span>
+        <span className="text-xs font-bold text-white/70 uppercase tracking-[0.3em] block mb-6">Total Findings</span>
         <div className="space-y-8">
           <span className="text-8xl font-normal text-white leading-[0.8]" style={{ fontFamily: 'var(--font-display)' }}>
-            {totalAssets.toLocaleString()}
+            {findingCount.toLocaleString()}
           </span>
           <span className="text-xs text-[var(--rag-green)] font-bold uppercase tracking-[0.25em] block">
-            {compliancePercent}% COMPLIANT
+            {compliance}% COMPLIANT
           </span>
         </div>
       </div>
 
-      {/* 4. Live Attack Surface */}
+      {/* 4. Scan Activity */}
       <div className="px-6 last:pr-8">
-        <span className="text-xs font-bold text-white/70 uppercase tracking-[0.3em] block mb-6">Surface Ledger</span>
+        <span className="text-xs font-bold text-white/70 uppercase tracking-[0.3em] block mb-6">Scan Cycles</span>
         <div className="space-y-8">
           <span className="text-8xl font-normal text-white leading-[0.8]" style={{ fontFamily: 'var(--font-display)' }}>
-            {attackSurface.toLocaleString()}
+            {scanCount.toLocaleString()}
           </span>
           <span className="text-xs text-[var(--rag-blue)] font-bold uppercase tracking-[0.25em] block">
             MONITORING ACTIVE

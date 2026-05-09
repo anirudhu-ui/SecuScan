@@ -44,7 +44,15 @@
   },
   "output": {
     "format": "text",
-    "parser": "custom"
+    "parser": "custom",
+    "nonfatal_exit_codes": [
+      1,
+      2
+    ],
+    "success_output_patterns": [
+      "ping statistics",
+      "packet loss"
+    ]
   },
   "safety": {
     "level": "safe",

@@ -206,8 +206,8 @@ class TaskExecutor:
                     )
                 )
 
-                # Upsert asset and report using the scanner's result
-                await self._upsert_asset_and_report_from_scanner(
+                # Upsert findings and report using the scanner's result
+                await self._upsert_findings_and_report_from_scanner(
                     db=db,
                     task_id=task_id,
                     scanner=scanner,
@@ -224,8 +224,7 @@ class TaskExecutor:
                 if not plugin:
                     raise ValueError(f"Plugin not found: {plugin_id}")
 
-                # Create pending records for visibility
-                await self._create_pending_records(db, task_id, plugin, target)
+                # Pending records for assets removed
                 
                 command = plugin_manager.build_command(plugin_id, inputs)
 
@@ -254,7 +253,11 @@ class TaskExecutor:
 
                 # Execute command
                 start_time = time.time()
-                output, exit_code = await self._execute_command(command, task_id)
+                output, exit_code = await self._execute_command(
+                    command,
+                    task_id,
+                    timeout=self._resolve_execution_timeout(inputs),
+                )
                 duration = time.time() - start_time
 
                 # Save raw output
@@ -262,11 +265,13 @@ class TaskExecutor:
                 with open(raw_path, 'w') as f:
                     f.write(output)
 
-                # Update task with results
-                final_status = TaskStatus.COMPLETED.value if exit_code == 0 else TaskStatus.FAILED.value
-                error_message = None
-                if exit_code != 0:
-                    error_message = f"Tool returned non-zero exit code {exit_code}. Check raw output for details."
+                # Some CLI tools use non-zero exit codes for "no result" states while still
+                # producing a complete, parseable report. Let plugin metadata opt into that.
+                final_status, error_message = self._classify_command_result(
+                    plugin=plugin,
+                    output=output,
+                    exit_code=exit_code,
+                )
 
                 await db.execute(
                     """
@@ -292,7 +297,8 @@ class TaskExecutor:
                     )
                 )
 
-                await self._upsert_asset_and_report(
+                # Upsert findings and report
+                await self._upsert_findings_and_report(
                     db=db,
                     task_id=task_id,
                     plugin=plugin,
@@ -421,6 +427,51 @@ class TaskExecutor:
         except Exception as e:
             logger.error(f"Failed to execute command: {e}")
             return f"Execution error: {str(e)}", -1
+
+    def _resolve_execution_timeout(self, inputs: Dict[str, Any]) -> int:
+        """Resolve per-task process timeout from plugin inputs."""
+        for key in ("max_scan_time", "timeout"):
+            raw_value = inputs.get(key)
+            try:
+                timeout = int(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if timeout > 0:
+                return timeout
+        return settings.sandbox_timeout
+
+    def _classify_command_result(self, plugin, output: str, exit_code: int) -> tuple[str, Optional[str]]:
+        """Map raw process exit codes into task status with plugin-specific tolerances."""
+        if exit_code == 0:
+            return TaskStatus.COMPLETED.value, None
+
+        output_config = plugin.output if isinstance(plugin.output, dict) else {}
+        tolerated_exit_codes = output_config.get("nonfatal_exit_codes", [])
+        success_patterns = output_config.get("success_output_patterns", [])
+
+        try:
+            tolerated = {int(code) for code in tolerated_exit_codes}
+        except (TypeError, ValueError):
+            tolerated = set()
+
+        normalized_output = output.lower()
+        matched_success_pattern = any(
+            isinstance(pattern, str) and pattern.lower() in normalized_output
+            for pattern in success_patterns
+        )
+
+        if exit_code in tolerated and matched_success_pattern:
+            logger.info(
+                "Treating exit code %s from %s as completed due to matching success output",
+                exit_code,
+                plugin.id,
+            )
+            return TaskStatus.COMPLETED.value, None
+
+        return (
+            TaskStatus.FAILED.value,
+            f"Tool returned non-zero exit code {exit_code}. Check raw output for details.",
+        )
     
     async def cancel_task(self, task_id: str) -> bool:
         """
@@ -495,40 +546,8 @@ class TaskExecutor:
             "preset": task_row["preset"]
         }
 
-    async def _create_pending_records(self, db, task_id: str, plugin, target: str):
-        """Create placeholder records in assets and attack surface for real-time visibility."""
-        if not target:
-            return
-
-        asset_id = f"asset:{target}"
-        
-        # Upsert asset with 'scanning' status
-        await db.execute(
-            """
-            INSERT INTO assets (
-                id, target, type, description, risk_level, status, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, (datetime('now')))
-            ON CONFLICT (target) DO UPDATE SET
-                status = 'scanning',
-                updated_at = (datetime('now'))
-            """,
-            (
-                asset_id,
-                target,
-                "domain" if "." in target and ":" not in target else "service",
-                f"Scanning in progress by {plugin.name}...",
-                "low",
-                "scanning"
-            )
-        )
-
-        # Removed 'Active Scans' entry to prevent UI duplication as it's already shown in Task Activity.
-        pass
-        
-        await self._invalidate_cached_views()
-
-    async def _upsert_asset_and_report(self, db, task_id: str, plugin, plugin_id: str, target: str, status: str, output: str = ""):
-        """Persist derived asset, attack surface, and report records into SQLite."""
+    async def _upsert_findings_and_report(self, db, task_id: str, plugin, plugin_id: str, target: str, status: str, output: str = ""):
+        """Persist derived findings and report records into SQLite."""
         parsed = self._parse_results(plugin, output)
         findings_data = parsed.get("findings", [])
         
@@ -538,87 +557,43 @@ class TaskExecutor:
             (json.dumps(parsed), task_id)
         )
 
-        if target:
-            asset_id = f"asset:{target}"
-            asset_type = "domain" if "." in target and ":" not in target else "service"
-            risk_level = "medium" if plugin.safety.get("level") == "intrusive" else "low"
-            if any(f["severity"] in ["critical", "high"] for f in findings_data):
-                risk_level = "high"
-
+        # Insert findings
+        for finding in findings_data:
+            u_id = str(uuid.uuid4()).replace("-", "")
+            finding_id = f"finding:{task_id}:{u_id[:8]}"
             await db.execute(
                 """
-                INSERT INTO assets (
-                    id, target, type, description, risk_level, status, last_scanned, 
-                    scan_count, updated_at, open_ports, technologies, services
-                ) VALUES (?, ?, ?, ?, ?, ?, (datetime('now')), 1, (datetime('now')), ?, ?, ?)
-                ON CONFLICT (target) DO UPDATE SET
-                    type = EXCLUDED.type,
-                    description = EXCLUDED.description,
-                    risk_level = EXCLUDED.risk_level,
-                    status = EXCLUDED.status,
-                    last_scanned = (datetime('now')),
-                    scan_count = assets.scan_count + 1,
-                    updated_at = (datetime('now')),
-                    open_ports = EXCLUDED.open_ports,
-                    technologies = EXCLUDED.technologies,
-                    services = EXCLUDED.services
+                INSERT INTO findings (
+                    id, task_id, plugin_id, title, category, severity,
+                    target, description, remediation, proof, cvss, cve,
+                    metadata_json, discovered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now')))
                 """,
                 (
-                    asset_id,
+                    finding_id,
+                    task_id,
+                    plugin_id,
+                    finding["title"],
+                    finding["category"],
+                    finding["severity"],
                     target,
-                    asset_type,
-                    f"Observed by {plugin.name}",
-                    risk_level,
-                    "active",
-                    json.dumps(parsed.get("open_ports", [])),
-                    json.dumps(parsed.get("technologies", [])),
-                    json.dumps(parsed.get("services", [])),
+                    finding["description"],
+                    finding.get("remediation", ""),
+                    finding.get("proof"),
+                    finding.get("cvss"),
+                    finding.get("cve"),
+                    json.dumps(finding.get("metadata", {})),
                 ),
             )
-
-            # Insert findings
-            for finding in findings_data:
-                # Use string splicing for compatibility
-                u_id = str(uuid.uuid4()).replace("-", "")
-                finding_id = f"finding:{task_id}:{u_id[:8]}"
-                await db.execute(
-                    """
-                    INSERT INTO findings (
-                        id, task_id, plugin_id, title, category, severity,
-                        target, description, remediation, proof, cvss, cve,
-                        metadata_json, discovered_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now')))
-                    """,
-                    (
-                        finding_id,
-                        task_id,
-                        plugin_id,
-                        finding["title"],
-                        finding["category"],
-                        finding["severity"],
-                        target,
-                        finding["description"],
-                        finding.get("remediation", ""),
-                        finding.get("proof"),
-                        finding.get("cvss"),
-                        finding.get("cve"),
-                        json.dumps(finding.get("metadata", {})),
-                    )
-                )
-
-            # Removed 'Scanned Targets' entry to prevent UI duplication.
-            # Information is available in Task history and Asset ledger.
-            pass
 
         await db.execute(
             """
             INSERT INTO reports (
-                id, task_id, name, type, generated_at, status, findings, assets, pages
-            ) VALUES (?, ?, ?, ?, (datetime('now')), ?, ?, ?, ?)
+                id, task_id, name, type, generated_at, status, findings, pages
+            ) VALUES (?, ?, ?, ?, (datetime('now')), ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 findings = EXCLUDED.findings,
-                assets = EXCLUDED.assets,
                 pages = EXCLUDED.pages
             """,
             (
@@ -628,100 +603,52 @@ class TaskExecutor:
                 "technical",
                 "ready" if status == TaskStatus.COMPLETED.value else "failed",
                 len(findings_data),
-                1 if target else 0,
                 1,
             ),
         )
 
-    async def _upsert_asset_and_report_from_scanner(self, db, task_id: str, scanner: Any, plugin_id: str, target: str, status: str, result: Dict[str, Any]):
-        """Persist modular scanner results into assets, findings, and reports."""
+    async def _upsert_findings_and_report_from_scanner(self, db, task_id: str, scanner: Any, plugin_id: str, target: str, status: str, result: Dict[str, Any]):
+        """Persist modular scanner results into findings, and reports."""
         findings_data = result.get("findings", [])
         
-        if target:
-            asset_id = f"asset:{target}"
-            asset_type = "domain" if "." in target and ":" not in target else "service"
-            
-            # Determine risk level based on max severity of findings
-            severity_priority = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
-            max_sev = "info"
-            for f in findings_data:
-                if severity_priority.get(f["severity"], 0) > severity_priority.get(max_sev, 0):
-                    max_sev = f["severity"]
-            
-            risk_level = "low"
-            if max_sev in ["critical", "high"]: risk_level = "high"
-            elif max_sev == "medium": risk_level = "medium"
-
+        # Insert findings
+        for finding in findings_data:
+            u_id = str(uuid.uuid4()).replace("-", "")
+            finding_id = f"finding:{task_id}:{u_id[:8]}"
             await db.execute(
                 """
-                INSERT INTO assets (
-                    id, target, type, description, risk_level, status, last_scanned, 
-                    scan_count, updated_at, open_ports, technologies, services
-                ) VALUES (?, ?, ?, ?, ?, ?, (datetime('now')), 1, (datetime('now')), ?, ?, ?)
-                ON CONFLICT (target) DO UPDATE SET
-                    type = EXCLUDED.type,
-                    description = EXCLUDED.description,
-                    risk_level = EXCLUDED.risk_level,
-                    status = EXCLUDED.status,
-                    last_scanned = (datetime('now')),
-                    scan_count = assets.scan_count + 1,
-                    updated_at = (datetime('now')),
-                    open_ports = EXCLUDED.open_ports,
-                    technologies = EXCLUDED.technologies,
-                    services = EXCLUDED.services
+                INSERT INTO findings (
+                    id, task_id, plugin_id, title, category, severity,
+                    target, description, remediation, proof, cvss, cve,
+                    metadata_json, discovered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now')))
                 """,
                 (
-                    asset_id,
+                    finding_id,
+                    task_id,
+                    plugin_id,
+                    finding["title"],
+                    finding["category"],
+                    finding["severity"],
                     target,
-                    asset_type,
-                    f"Last scanned by {scanner.name}",
-                    risk_level,
-                    "active",
-                    json.dumps(result.get("open_ports", [])),
-                    json.dumps(result.get("technologies", [])),
-                    json.dumps(result.get("services", [])),
-                ),
-            )
-
-            # Insert findings
-            for finding in findings_data:
-                u_id = str(uuid.uuid4()).replace("-", "")
-                finding_id = f"finding:{task_id}:{u_id[:8]}"
-                await db.execute(
-                    """
-                    INSERT INTO findings (
-                        id, task_id, plugin_id, title, category, severity,
-                        target, description, remediation, proof, cvss, cve,
-                        metadata_json, discovered_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now')))
-                    """,
-                    (
-                        finding_id,
-                        task_id,
-                        plugin_id,
-                        finding["title"],
-                        finding["category"],
-                        finding["severity"],
-                        target,
-                        finding["description"],
-                        finding.get("remediation", ""),
-                        finding.get("proof"),
-                        finding.get("cvss"),
-                        finding.get("cve"),
-                        json.dumps(finding.get("metadata", {})),
-                    )
+                    finding["description"],
+                    finding.get("remediation", ""),
+                    finding.get("proof"),
+                    finding.get("cvss"),
+                    finding.get("cve"),
+                    json.dumps(finding.get("metadata", {})),
                 )
+            )
 
         # Create/Update report
         await db.execute(
             """
             INSERT INTO reports (
-                id, task_id, name, type, generated_at, status, findings, assets, pages
-            ) VALUES (?, ?, ?, ?, (datetime('now')), ?, ?, ?, ?)
+                id, task_id, name, type, generated_at, status, findings, pages
+            ) VALUES (?, ?, ?, ?, (datetime('now')), ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 findings = EXCLUDED.findings,
-                assets = EXCLUDED.assets,
                 pages = EXCLUDED.pages
             """,
             (
@@ -731,7 +658,6 @@ class TaskExecutor:
                 "professional" if status == TaskStatus.COMPLETED.value else "failed",
                 "ready" if status == TaskStatus.COMPLETED.value else "failed",
                 len(findings_data),
-                1 if target else 0,
                 2, # Professional reports are typically multi-page
             ),
         )

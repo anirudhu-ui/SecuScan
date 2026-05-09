@@ -27,7 +27,7 @@ export const scanTools: ScanTool[] = [
     { id: 'scapy_recon', name: 'Scapy Recon', purpose: 'Low-level network probing and packet crafting', riskLevel: 'active', presetCompatibility: 'none', requiresConsent: true, category: 'recon', subcategory: 'network' },
     
     // --- VULNERABILITY SCANNERS ---
-    { id: 'nikto', name: 'Nikto', purpose: 'Comprehensive web server security scanning', riskLevel: 'active', presetCompatibility: 'deep-scan', requiresConsent: true, category: 'vulnerability', isQuickStart: true },
+    { id: 'nikto', name: 'Nikto', purpose: 'Tunable web server vulnerability scanning with Nikto presets', riskLevel: 'active', presetCompatibility: 'deep-scan', requiresConsent: true, category: 'vulnerability', isQuickStart: true },
     { id: 'wpscan', name: 'WPScan', purpose: 'Specialized WordPress vulnerability auditor', riskLevel: 'active', presetCompatibility: 'none', requiresConsent: true, category: 'vulnerability', isQuickStart: true },
     { id: 'nuclei', name: 'Nuclei', purpose: 'Template-based vulnerability detection at scale', riskLevel: 'active', presetCompatibility: 'both', requiresConsent: true, category: 'vulnerability', isQuickStart: true },
     { id: 'dir_discovery', name: 'Directory Discovery', purpose: 'Fuzzing for hidden files and directories', riskLevel: 'active', presetCompatibility: 'deep-scan', requiresConsent: true, category: 'vulnerability' },

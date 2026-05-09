@@ -51,7 +51,6 @@ export default function AppShell({ children }: AppShellProps) {
         { to: routes.scans, label: 'Scans' },
         { to: routes.findings, label: 'Findings' },
         { to: routes.reports, label: 'Reports' },
-        { to: routes.assets, label: 'Assets' },
         { to: routes.toolkit, label: 'Toolkit' },
         { to: routes.settings, label: 'Settings' },
     ]

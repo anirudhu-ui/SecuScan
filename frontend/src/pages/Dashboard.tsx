@@ -24,20 +24,7 @@ type Task = {
   duration_seconds?: number | null
 }
 
-type Asset = {
-  id: string
-  target: string
-  description: string
-  risk_level: string
-  last_scanned: string
-  status: string
-}
-
 type Summary = {
-  total_assets: number
-  active_assets: number
-  critical_assets: number
-  total_attack_surface: number
   total_findings: number
   critical_findings: number
   high_findings: number
@@ -48,9 +35,6 @@ type Summary = {
   recent_findings: Finding[]
   running_tasks: Task[]
   recent_tasks: Task[]
-  has_high_risk_assets: boolean
-  high_risk_assets: Asset[]
-  attack_surface_by_category: Record<string, number>
   scan_activity: { total: number; completed: number; running: number }
 }
 
@@ -74,10 +58,6 @@ function normalizeSummary(data: Partial<Summary> | null | undefined): Summary {
     : emptySummary.scan_activity
 
   return {
-    total_assets: asNumber(summary.total_assets),
-    active_assets: asNumber(summary.active_assets),
-    critical_assets: asNumber(summary.critical_assets),
-    total_attack_surface: asNumber(summary.total_attack_surface),
     total_findings: asNumber(summary.total_findings),
     critical_findings: asNumber(summary.critical_findings),
     high_findings: asNumber(summary.high_findings),
@@ -116,23 +96,6 @@ function normalizeSummary(data: Partial<Summary> | null | undefined): Summary {
         duration_seconds: asOptionalNumber(task?.duration_seconds),
       }))
       : [],
-    high_risk_assets: Array.isArray(summary.high_risk_assets)
-      ? summary.high_risk_assets.map((asset) => ({
-        id: asString(asset?.id),
-        target: asString(asset?.target, 'Unknown target'),
-        description: asString(asset?.description),
-        risk_level: asString(asset?.risk_level, 'low'),
-        last_scanned: asString(asset?.last_scanned, new Date().toISOString()),
-        status: asString(asset?.status, 'active'),
-      }))
-      : [],
-    has_high_risk_assets: Boolean(summary.has_high_risk_assets),
-    attack_surface_by_category:
-      summary.attack_surface_by_category && typeof summary.attack_surface_by_category === 'object' && !Array.isArray(summary.attack_surface_by_category)
-        ? Object.fromEntries(
-          Object.entries(summary.attack_surface_by_category).map(([key, value]) => [key, asNumber(value)])
-        )
-        : {},
     scan_activity: {
       total: asNumber(rawScanActivity.total),
       completed: asNumber(rawScanActivity.completed),
@@ -142,10 +105,6 @@ function normalizeSummary(data: Partial<Summary> | null | undefined): Summary {
 }
 
 const emptySummary: Summary = {
-  total_assets: 0,
-  active_assets: 0,
-  critical_assets: 0,
-  total_attack_surface: 0,
   total_findings: 0,
   critical_findings: 0,
   high_findings: 0,
@@ -156,9 +115,6 @@ const emptySummary: Summary = {
   recent_findings: [],
   running_tasks: [],
   recent_tasks: [],
-  has_high_risk_assets: false,
-  high_risk_assets: [],
-  attack_surface_by_category: {},
   scan_activity: { total: 0, completed: 0, running: 0 },
 }
 
@@ -281,17 +237,11 @@ export default function Dashboard() {
 
   const risk = getRiskProfile(summary)
   const criticalHigh = summary.critical_findings + summary.high_findings
-  const safeAssetsPercent = summary.total_assets > 0
-    ? Math.max(0, Math.round(((summary.total_assets - summary.critical_assets) / summary.total_assets) * 100))
-    : 100
+  
   const progressWidth = summary.scan_activity.total > 0
     ? Math.max(8, Math.min(100, (summary.scan_activity.completed / summary.scan_activity.total) * 100))
     : 0
-  const attackSurfaceBreakdown = Object.entries(summary.attack_surface_by_category).slice(0, 3)
-  const coverageGaps = Math.max(0, summary.total_assets - summary.active_assets)
-  const coveragePercent = summary.total_assets > 0
-    ? Math.round((summary.active_assets / summary.total_assets) * 100)
-    : 0
+  
   const statusBadgeClasses = backendConnected === null
     ? 'border-accent-silver/10 bg-silver/5 text-silver-bright'
     : backendConnected
@@ -319,7 +269,7 @@ export default function Dashboard() {
             SecuScan <span className="text-transparent stroke-white" style={{ WebkitTextStroke: '2px var(--accent-silver-bright)' }}>Workspace</span>
           </h1>
           <p className="text-sm font-mono text-silver/40 uppercase tracking-widest italic leading-relaxed">
-            CENTRAL_INTELLIGENCE_OVERVIEW // ACTIVE_NODES: {summary.total_assets} // THREAT_LEVEL: {risk.label.toUpperCase()}
+            CENTRAL_INTELLIGENCE_OVERVIEW // VULNERABILITIES: {summary.total_findings} // THREAT_LEVEL: {risk.label.toUpperCase()}
           </p>
         </motion.div>
 
@@ -351,7 +301,7 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="w-14 h-14 bg-charcoal-dark border-4 border-black flex items-center justify-center text-rag-blue shadow-inner group-hover:bg-rag-blue group-hover:text-black transition-all">
-              <span className="material-symbols-outlined text-2xl font-black">database</span>
+              <span className="material-symbols-outlined text-2xl font-black">terminal</span>
             </div>
           </div>
 
@@ -397,13 +347,13 @@ export default function Dashboard() {
                 <ExecutiveStatsBar
                   riskLabel={risk.label}
                   criticalVulns={summary.critical_findings}
-                  totalAssets={summary.total_assets}
-                  attackSurface={summary.total_attack_surface}
-                  compliancePercent={safeAssetsPercent}
+                  totalFindings={summary.total_findings}
+                  scanActivity={summary.scan_activity.total}
+                  compliancePercent={100}
                   riskNote={summary.critical_findings > 0
-                    ? `Status escalated. ${summary.critical_findings} major vulnerabilities detected on production nodes.`
+                    ? `Status escalated. ${summary.critical_findings} major vulnerabilities detected on monitored targets.`
                     : summary.high_findings > 4
-                      ? `Risk exposure has increased by ${summary.high_findings}% following recent network expansion.`
+                      ? `Risk exposure has increased following recent scans.`
                       : "Security posture remains stable. Monitoring systems active across all sectors."}
                 />
               </motion.section>
@@ -607,143 +557,37 @@ export default function Dashboard() {
                 </div>
               </motion.section>
 
-              {/* Detail Plane: Asset Ledger & Composition */}
-              <motion.section variants={itemVariants} className="pt-8 relative">
-                <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-12 items-start px-8">
-                  <div className="space-y-12">
-                    <header className="flex justify-between items-center">
-                      <h3
-                        className="text-2xl text-silver-bright font-light italic tracking-tight"
-                        style={{ fontFamily: 'var(--font-display)' }}
-                      >
-                        {summary.has_high_risk_assets ? "High Risk Asset Ledger" : "Operational Asset Ledger"}
-                      </h3>
-                      <Link to={routes.assets} className="text-[10px] font-bold text-silver/70 hover:text-silver-bright uppercase tracking-widest transition-all">
-                        Inventory Matrix
-                      </Link>
-                    </header>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-accent-silver/10 border border-accent-silver/5 overflow-hidden">
-                      {summary.high_risk_assets.length === 0 ? (
-                        <div className="bg-charcoal p-16 text-center md:col-span-3 text-[10px] text-silver/70 uppercase tracking-[0.3em] font-light">
-                          No assets currently registered in the inventory
-                        </div>
-                      ) : (
-                        summary.high_risk_assets.map((asset, idx) => (
-                          <motion.div 
-                            key={asset.id}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: idx * 0.1 }}
-                            whileHover={{ backgroundColor: 'rgba(255, 255, 255, 0.02)' }}
-                            className="bg-charcoal p-8 group transition-all cursor-pointer border-r border-b border-accent-silver/5 flex flex-col min-h-[220px]"
-                          >
-                            <div className="flex justify-between items-start mb-6">
-                              <span className={`text-[9px] font-bold px-2 py-0.5 uppercase tracking-tighter ${
-                                asset.risk_level === 'critical' ? 'bg-rag-red text-white' :
-                                asset.risk_level === 'high' ? 'bg-rag-amber text-black' :
-                                asset.status === 'scanning' ? 'bg-rag-amber/20 text-rag-amber border border-rag-amber animate-pulse' :
-                                'bg-accent-silver/20 text-silver/60'
-                              }`}>
-                                {asset.status === 'scanning' ? 'SCANNING' : asset.risk_level.toUpperCase()}
-                              </span>
-                              <span className="text-[10px] font-mono text-silver/60 group-hover:text-silver/80 transition-colors">
-                                #{String(idx + 1).padStart(2, '0')}
-                              </span>
-                            </div>
-                            
-                            <div className="mb-6 flex-grow">
-                              <h4 className="text-lg font-medium text-silver-bright truncate group-hover:text-accent-cyan transition-colors mb-2 italic">
-                                {asset.target}
-                              </h4>
-                              <p className="text-[10px] text-silver/70 font-mono tracking-widest line-clamp-2 uppercase">
-                                {asset.description || `${asset.risk_level} priority infrastructure node`}
-                              </p>
-                            </div>
-
-                            <div className="flex items-center justify-between pt-6 border-t border-accent-silver/5 mt-auto">
-                              <div className="flex flex-col">
-                                <span className="text-[8px] uppercase text-silver/80 tracking-[0.2em] font-bold">Trace ID</span>
-                                <span className="text-[10px] text-silver/85 font-mono">{asset.id.slice(0, 8)}</span>
-                              </div>
-                              <div className="flex flex-col items-end">
-                                <span className="text-[8px] uppercase text-silver/80 tracking-[0.2em] font-bold">Last Pulse</span>
-                                <span className="text-[10px] text-rag-green font-mono uppercase tracking-tighter">
-                                  {formatLocaleDate(asset.last_scanned)}
-                                </span>
-                              </div>
-                            </div>
-                          </motion.div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <aside className="space-y-12">
-                    <div className="space-y-10 bg-charcoal/30 p-10 border border-accent-silver/5">
-                      <div>
-                        <div className="text-xs text-silver/80 uppercase tracking-[0.2em] font-bold mb-6">Monitoring Coverage</div>
-                        <div className="flex items-end justify-between items-baseline mb-4">
-                          <span
-                            className="text-5xl text-silver-bright font-light leading-none"
-                            style={{ fontFamily: 'var(--font-display)' }}
-                          >
-                            {coveragePercent}%
-                          </span>
-                          <div className="text-right">
-                            <span className="text-[11px] text-silver/80 uppercase block tracking-[0.15em]">Outstanding Gaps</span>
-                            <span className="text-lg text-rag-amber font-mono font-light leading-none">{coverageGaps}</span>
+              {/* Section: Recent Findings Ledger */}
+              <motion.section variants={itemVariants} className="px-8">
+                  <header className="mb-10">
+                    <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-silver-bright flex items-center gap-3">
+                      <span className="w-2 h-2 border border-accent-silver/40 rotate-45"></span>
+                      Recent Audit Findings
+                    </h3>
+                  </header>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {summary.recent_findings.length === 0 ? (
+                          <div className="col-span-full bg-charcoal/30 p-12 text-center border border-accent-silver/5">
+                              <p className="text-[10px] text-silver/70 uppercase tracking-[0.3em] italic">No findings detected in recent audits.</p>
                           </div>
-                        </div>
-                        <div className="h-[3px] w-full bg-accent-silver/5 overflow-hidden mt-8">
-                          <motion.div
-                            initial={{ width: 0 }}
-                            animate={{ width: `${coveragePercent}%` }}
-                            transition={{ duration: 2, ease: "circOut" }}
-                            className="h-full bg-rag-green"
-                          />
-                        </div>
-                        <p className="text-xs text-silver/80 leading-relaxed font-light mt-8 uppercase tracking-[0.15em]">
-                          Environmental visibility index: active monitors vs registered estate.
-                        </p>
-                      </div>
-
-                      <div className="pt-10 border-t border-accent-silver/5">
-                        <div className="text-xs text-silver/80 uppercase tracking-[0.2em] font-bold mb-8">Surface Ledger Composition</div>
-                        {attackSurfaceBreakdown.length === 0 && (
-                          <div className="text-xs text-silver/80 uppercase tracking-[0.15em] italic">Telemetry unavailable</div>
-                        )}
-                        <div className="space-y-8">
-                          {attackSurfaceBreakdown.map(([label, value]) => (
-                            <div key={label} className="space-y-3">
-                              <div className="flex items-center justify-between gap-4">
-                                <span className="text-xs font-bold uppercase tracking-[0.15em] text-silver-bright">{label}</span>
-                                <span className="text-xs font-mono text-silver/85">{value} UNITS</span>
+                      ) : (
+                          summary.recent_findings.map((finding) => (
+                              <div key={finding.id} className="bg-charcoal p-6 border border-accent-silver/5 hover:border-accent-silver/20 transition-all group">
+                                  <div className="flex justify-between items-start mb-4">
+                                      <span className={`text-[9px] font-black px-2 py-0.5 uppercase tracking-widest border ${severityTone(finding.severity)}`}>
+                                          {finding.severity}
+                                      </span>
+                                      <span className="text-[9px] font-mono text-silver/40 uppercase">{formatLocaleDate(finding.discovered_at)}</span>
+                                  </div>
+                                  <h4 className="text-sm font-bold text-silver-bright mb-2 group-hover:text-white transition-colors">{finding.title}</h4>
+                                  <p className="text-[10px] text-silver/60 uppercase tracking-widest font-mono italic truncate">Target: {finding.target}</p>
                               </div>
-                              <div className="h-px bg-accent-silver/10">
-                                <motion.div
-                                  initial={{ width: 0 }}
-                                  animate={{
-                                    width: `${summary.total_attack_surface > 0 ? Math.max(5, (value / summary.total_attack_surface) * 100) : 0}%`,
-                                  }}
-                                  transition={{ duration: 1.2, ease: "easeOut" }}
-                                  className="h-px bg-silver/60"
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-8 border border-accent-silver/5 text-center">
-                      <p className="text-[11px] text-silver/70 uppercase tracking-[0.25em]">
-                        Archived Telemetry • Index 01-A
-                      </p>
-                    </div>
-                  </aside>
-                </div>
+                          ))
+                      )}
+                  </div>
               </motion.section>
+
             </motion.div>
           )}
         </AnimatePresence>

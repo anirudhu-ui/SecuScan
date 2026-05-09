@@ -91,23 +91,6 @@ class Database:
                 python_packages_json TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS assets (
-                id TEXT PRIMARY KEY,
-                target TEXT NOT NULL UNIQUE,
-                type TEXT NOT NULL DEFAULT 'service',
-                description TEXT NOT NULL DEFAULT '',
-                risk_level TEXT NOT NULL DEFAULT 'low',
-                status TEXT NOT NULL DEFAULT 'active',
-                last_scanned TIMESTAMP,
-                scan_count INTEGER NOT NULL DEFAULT 0,
-                open_ports TEXT NOT NULL DEFAULT '[]',
-                technologies TEXT NOT NULL DEFAULT '[]',
-                services TEXT NOT NULL DEFAULT '[]',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
-                updated_at TIMESTAMP NOT NULL DEFAULT (datetime('now'))
-            );
-
             CREATE TABLE IF NOT EXISTS findings (
                 id TEXT PRIMARY KEY,
                 task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
@@ -125,17 +108,6 @@ class Database:
                 metadata_json TEXT NOT NULL DEFAULT '{}'
             );
 
-            CREATE TABLE IF NOT EXISTS attack_surface_entries (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
-                category TEXT NOT NULL,
-                item TEXT NOT NULL,
-                details TEXT NOT NULL DEFAULT '',
-                risk TEXT NOT NULL DEFAULT 'info',
-                source TEXT NOT NULL DEFAULT '',
-                last_seen TIMESTAMP NOT NULL DEFAULT (datetime('now')),
-                metadata_json TEXT NOT NULL DEFAULT '{}'
-            );
 
             CREATE TABLE IF NOT EXISTS reports (
                 id TEXT PRIMARY KEY,
@@ -145,7 +117,6 @@ class Database:
                 generated_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
                 status TEXT NOT NULL DEFAULT 'ready',
                 findings INTEGER NOT NULL DEFAULT 0,
-                assets INTEGER NOT NULL DEFAULT 0,
                 pages INTEGER NOT NULL DEFAULT 0,
                 file_path TEXT
             );

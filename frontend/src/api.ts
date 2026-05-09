@@ -113,17 +113,11 @@ export function getDashboardSummary() {
   return request('/dashboard/summary')
 }
 
-export function getAssets() {
-  return request('/assets')
-}
 
 export function getFindings() {
   return request('/findings')
 }
 
-export function getAttackSurface() {
-  return request('/attack-surface')
-}
 
 export function getReports() {
   return request('/reports')

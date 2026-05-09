@@ -9,7 +9,6 @@ import { routes } from '../routes'
  * g + s : Scanners
  * g + h : History
  * g + f : Findings
- * g + a : Assets
  * g + r : Reports
  * g + t : Settings (Tools)
  * Esc   : Close focus/modals
@@ -43,7 +42,6 @@ export function useShortcuts() {
                     case 's': navigate(routes.scans); break
                     case 'h': navigate(routes.scans); break
                     case 'f': navigate(routes.findings); break
-                    case 'a': navigate(routes.assets); break
                     case 'r': navigate(routes.reports); break
                     case 't': navigate(routes.settings); break
                 }

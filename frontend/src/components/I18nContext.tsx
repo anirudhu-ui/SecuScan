@@ -8,7 +8,6 @@ const translations: Translations = {
   en: {
     common: {
       dashboard: 'Dashboard',
-      assets: 'Assets',
       scanners: 'Scanners',
       history: 'History',
       findings: 'Findings',

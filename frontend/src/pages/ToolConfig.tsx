@@ -37,6 +37,51 @@ function isRequiredFieldValid(field: PluginFieldSchema, value: unknown): boolean
   return true
 }
 
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getFieldValidationError(field: PluginFieldSchema, value: unknown): string | null {
+  if (!isRequiredFieldValid(field, value)) {
+    return `${field.label} is required`
+  }
+
+  const validation = field.validation || {}
+  const message = typeof validation.message === 'string' ? validation.message : null
+
+  if (typeof value === 'string' && value.trim()) {
+    const pattern = typeof validation.pattern === 'string' ? validation.pattern : null
+    if (pattern) {
+      try {
+        if (!new RegExp(pattern).test(value.trim())) {
+          return message || `${field.label} is not valid`
+        }
+      } catch {
+        return null
+      }
+    }
+  }
+
+  if (field.type === 'integer' && value !== '' && value !== undefined && value !== null) {
+    const numericValue = asFiniteNumber(value)
+    if (numericValue === null || !Number.isInteger(numericValue)) {
+      return message || `${field.label} must be a whole number`
+    }
+
+    const min = asFiniteNumber(validation.min)
+    const max = asFiniteNumber(validation.max)
+    if (min !== null && numericValue < min) return message || `${field.label} must be at least ${min}`
+    if (max !== null && numericValue > max) return message || `${field.label} must be no more than ${max}`
+  }
+
+  return null
+}
+
 function resolvePresetInputs(
   fields: PluginFieldSchema[],
   presets: Record<string, Record<string, unknown>>,
@@ -117,10 +162,15 @@ export default function ToolConfig() {
   }, [toolId, navigate, addToast])
 
   const presetNames = useMemo(() => Object.keys(schema?.presets || {}), [schema])
-  const requiredMissing = useMemo(() => {
-    if (!schema) return []
-    return schema.fields.filter((field) => !isRequiredFieldValid(field, inputs[field.id]))
+  const validationErrors = useMemo<Record<string, string>>(() => {
+    if (!schema) return {}
+    return schema.fields.reduce<Record<string, string>>((errors, field) => {
+      const error = getFieldValidationError(field, inputs[field.id])
+      if (error) errors[field.id] = error
+      return errors
+    }, {})
   }, [schema, inputs])
+  const invalidFieldCount = Object.keys(validationErrors).length
   const safetyLevel = String(schema?.safety?.level || 'safe')
 
   const handleFieldChange = (field: PluginFieldSchema, value: unknown) => {
@@ -135,8 +185,8 @@ export default function ToolConfig() {
 
   const handleStartScan = async () => {
     if (!plugin || !schema || submitting) return
-    if (requiredMissing.length > 0) {
-      addToast('Complete all required fields before starting the scan.', 'error')
+    if (invalidFieldCount > 0) {
+      addToast('Fix highlighted scan parameters before starting the scan.', 'error')
       return
     }
     if (plugin.requires_consent && !consentGranted) {
@@ -254,7 +304,7 @@ export default function ToolConfig() {
             <div className="space-y-6">
               {schema.fields.map((field) => {
                 const value = inputs[field.id]
-                const isMissing = !isRequiredFieldValid(field, value)
+                const validationError = validationErrors[field.id]
 
                 return (
                   <motion.div key={field.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
@@ -263,7 +313,7 @@ export default function ToolConfig() {
                         {field.label}
                         {field.required && <span className="text-rag-red ml-2">*</span>}
                       </label>
-                      {isMissing && <span className="text-[9px] uppercase tracking-widest text-rag-red font-black">required</span>}
+                      {validationError && <span className="text-[9px] uppercase tracking-widest text-rag-red font-black">invalid</span>}
                     </div>
 
                     {field.type === 'text' ? (
@@ -338,6 +388,7 @@ export default function ToolConfig() {
                     )}
 
                     {field.help && <p className="text-[10px] text-silver/40 uppercase tracking-widest">{field.help}</p>}
+                    {validationError && <p className="text-[10px] text-rag-red uppercase tracking-widest">{validationError}</p>}
                   </motion.div>
                 )
               })}
@@ -374,7 +425,7 @@ export default function ToolConfig() {
               {submitting ? 'QUEUEING...' : 'INITIATE_SCAN'}
             </button>
             <p className="text-[10px] text-silver/30 uppercase tracking-widest">
-              Required remaining: {requiredMissing.length}
+              Parameter issues: {invalidFieldCount}
             </p>
           </section>
         </aside>

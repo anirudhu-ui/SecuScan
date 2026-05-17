@@ -997,18 +997,18 @@ class ReportGenerator:
         for finding in payload["findings"]:
             # Derive a stable, deterministic rule ID from finding-specific identifiers
             raw_rule_id = None
-            
+
             # 1. Check CVE
             cve = finding.get("cve")
             if cve and isinstance(cve, str) and cve.strip():
                 raw_rule_id = cve.strip()
-            
+
             # 2. Check CWE (direct or in metadata)
             if not raw_rule_id:
                 cwe = finding.get("cwe") or finding.get("metadata", {}).get("cwe")
                 if cwe and isinstance(cwe, str) and cwe.strip():
                     raw_rule_id = cwe.strip()
-            
+
             # 3. Check specific check/plugin/finding identifiers
             if not raw_rule_id:
                 for key in ["check_id", "plugin_rule_id", "rule_id", "id"]:
@@ -1016,11 +1016,11 @@ class ReportGenerator:
                     if val and isinstance(val, str) and val.strip():
                         raw_rule_id = val.strip()
                         break
-            
+
             # 4. Fallback to sanitized title
             if not raw_rule_id:
                 raw_rule_id = finding.get("title") or "security-finding"
-            
+
             # Sanitize raw rule ID (lowercase, replace non-alphanumeric with hyphens)
             rule_id = re.sub(r"[^a-zA-Z0-9\-]", "-", raw_rule_id).lower()
             rule_id = re.sub(r"-+", "-", rule_id).strip("-")
@@ -1061,7 +1061,7 @@ class ReportGenerator:
             # Check if target looks like a file path or URI
             if target:
                 is_url = "://" in target or target.startswith(("http://", "https://"))
-                
+
                 location = {
                     "physicalLocation": {
                         "artifactLocation": {

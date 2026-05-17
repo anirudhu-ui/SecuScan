@@ -58,25 +58,25 @@ async def insert_mock_failed_task(task_id: str):
 
 def test_download_sarif_report_success(test_client):
     task_id = "test-task-completed-123"
-    
+
     # Pre-populate database with a completed task
     asyncio.run(insert_mock_completed_task(task_id))
-    
+
     # Request the SARIF report
     response = test_client.get(f"/api/v1/task/{task_id}/report/sarif")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/sarif+json"
-    
+
     # Verify Content-Disposition header
     assert "attachment" in response.headers["content-disposition"]
     assert "filename=secuscan_http-inspector_example-com_" in response.headers["content-disposition"]
     assert response.headers["content-disposition"].endswith(".sarif")
-    
+
     # Verify SARIF payload
     sarif = response.json()
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["tool"]["driver"]["name"] == "http_inspector"
-    
+
     results = sarif["runs"][0]["results"]
     assert len(results) == 1
     assert results[0]["ruleId"] == "cve-2026-0001"
@@ -90,7 +90,7 @@ def test_download_sarif_report_not_found(test_client):
 def test_download_sarif_report_not_finished(test_client):
     # If the task is queued/running, we expect 400 Bad Request
     task_id = "test-task-running-123"
-    
+
     async def insert_running_task():
         db = await get_db()
         await db.execute(
@@ -102,16 +102,16 @@ def test_download_sarif_report_not_finished(test_client):
         )
 
     asyncio.run(insert_running_task())
-    
+
     response = test_client.get(f"/api/v1/task/{task_id}/report/sarif")
     assert response.status_code == 400
     assert "Task is not finished yet" in response.json()["detail"]
 
 def test_download_sarif_report_failed_task(test_client):
     task_id = "test-task-failed-123"
-    
+
     asyncio.run(insert_mock_failed_task(task_id))
-    
+
     # Requesting report for failed task is allowed (returns 200 with empty findings or partial data)
     response = test_client.get(f"/api/v1/task/{task_id}/report/sarif")
     assert response.status_code == 200

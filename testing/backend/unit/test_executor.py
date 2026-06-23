@@ -133,6 +133,26 @@ Request timeout for icmp_seq 0
     assert result["metrics"]["filtered"] is True
 
 
+def test_icmp_ping_parser_handles_packet_loss_only_output(setup_test_environment):
+    manager = _ensure_plugins_loaded()
+    plugin = manager.get_plugin("icmp_ping")
+    assert plugin is not None
+
+    executor = TaskExecutor()
+    output = """PING 8.8.8.8 (8.8.8.8): 56 data bytes
+
+--- 8.8.8.8 ping statistics ---
+4 packets transmitted, 4 packets received, 0.0% packet loss
+"""
+
+    result = executor._parse_results(plugin, output)
+
+    assert result["count"] == 1
+    assert result["findings"][0]["title"] == "Host Reachable: 8.8.8.8"
+    assert result["metrics"]["packet_loss_percent"] == 0.0
+    assert result["metrics"]["reachable"] is True
+
+
 def test_classify_command_result_allows_nonfatal_ping_exit_with_statistics(setup_test_environment):
     manager = _ensure_plugins_loaded()
     plugin = manager.get_plugin("icmp_ping")
@@ -706,10 +726,10 @@ async def test_enforce_guardrails_empty_target():
 async def test_enforce_guardrails_validation_failure(setup_test_environment):
     await init_db(settings.database_path)
     db = await get_db()
-    
+
     executor = TaskExecutor()
     task_id = str(uuid.uuid4())
-    
+
     # Pre-populate task in DB so mark_task_failed works
     await db.execute(
         "INSERT INTO tasks (id, plugin_id, tool_name, target, inputs_json, status, consent_granted, safe_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -718,11 +738,11 @@ async def test_enforce_guardrails_validation_failure(setup_test_environment):
 
     with patch("backend.secuscan.executor.get_plugin_manager") as mock_pm, \
          patch("backend.secuscan.executor.asyncio.to_thread") as mock_to_thread:
-        
+
         mock_plugin = MagicMock()
         mock_plugin.category = "Network"
         mock_pm.return_value.get_plugin.return_value = mock_plugin
-        
+
         # validate_target returns (False, "invalid target")
         mock_to_thread.return_value = (False, "invalid target")
 
@@ -739,10 +759,10 @@ async def test_enforce_guardrails_validation_failure(setup_test_environment):
 async def test_enforce_guardrails_network_policy_failure(setup_test_environment):
     await init_db(settings.database_path)
     db = await get_db()
-    
+
     executor = TaskExecutor()
     task_id = str(uuid.uuid4())
-    
+
     await db.execute(
         "INSERT INTO tasks (id, plugin_id, tool_name, target, inputs_json, status, consent_granted, safe_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (task_id, "nmap", "nmap", "10.0.0.1", "{}", TaskStatus.QUEUED.value, 1, 0)
@@ -754,11 +774,11 @@ async def test_enforce_guardrails_network_policy_failure(setup_test_environment)
     with patch("backend.secuscan.executor.settings") as mock_settings, \
          patch("backend.secuscan.executor.get_policy_engine", return_value=mock_engine), \
          patch("backend.secuscan.executor.get_plugin_manager") as mock_pm:
-        
+
         mock_settings.enforce_network_policy = True
         mock_settings.network_policy_failure_mode = "block"
         mock_settings.dns_resolution_timeout_seconds = 5
-        
+
         mock_plugin = MagicMock()
         mock_plugin.category = "Network"
         mock_pm.return_value.get_plugin.return_value = mock_plugin
@@ -775,14 +795,14 @@ async def test_enforce_guardrails_network_policy_failure(setup_test_environment)
 @pytest.mark.asyncio
 async def test_ensure_docker_network_exists():
     executor = TaskExecutor()
-    
+
     proc = MagicMock()
     proc.returncode = 0
     proc.wait = AsyncMock(return_value=0)
-    
+
     with patch("backend.secuscan.executor.asyncio.create_subprocess_exec", return_value=proc) as mock_create:
         await executor._ensure_docker_network()
-        
+
         # Should only call inspect network once
         mock_create.assert_called_once_with(
             "docker", "network", "inspect", settings.docker_network,
@@ -795,10 +815,10 @@ async def test_ensure_docker_network_exists():
 async def test_execute_modular_scanner(setup_test_environment):
     await init_db(settings.database_path)
     db = await get_db()
-    
+
     task_id = str(uuid.uuid4())
     owner_id = str(uuid.uuid4())
-    
+
     # Insert task in DB
     await db.execute(
         """
@@ -830,7 +850,7 @@ async def test_execute_modular_scanner(setup_test_environment):
             }
 
     executor = TaskExecutor()
-    
+
     # We patch the MODULAR_SCANNERS dictionary in backend.secuscan.executor
     with patch.dict("backend.secuscan.executor.MODULAR_SCANNERS", {"mock_scanner": MockScanner}):
         status, duration = await executor._execute_modular_scanner(
@@ -852,7 +872,44 @@ async def test_execute_modular_scanner(setup_test_environment):
     structured = json.loads(row["structured_json"])
     assert len(structured["findings"]) == 1
     assert structured["findings"][0]["title"] == "Mock Finding"
-    
+
+    await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_execute_task_aborts_when_task_no_longer_queued(setup_test_environment):
+    """
+    When the optimistic UPDATE ... WHERE status='queued' returns rowcount 0
+    (because the task was deleted or its status changed before execution started),
+    execute_task() must abort without proceeding further.
+    """
+    await init_db(settings.database_path)
+    db = await get_db()
+
+    task_id = str(uuid.uuid4())
+    await db.execute(
+        """
+        INSERT INTO tasks (id, plugin_id, tool_name, target, inputs_json,
+                           status, consent_granted, safe_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (task_id, "nmap", "nmap", "127.0.0.1", '{"target":"127.0.0.1"}',
+         TaskStatus.RUNNING.value, 1, 1)
+    )
+
+    executor = TaskExecutor()
+
+    with patch("backend.secuscan.executor.get_plugin_manager") as mock_pm, \
+         patch("backend.secuscan.executor.concurrent_limiter") as mock_limiter:
+        mock_limiter.release = AsyncMock()
+        mock_pm.return_value.get_plugin.return_value = MagicMock(name="nmap", presets={})
+
+        await executor.execute_task(task_id)
+
+    # Verify the task was NOT updated — it stays in its original (RUNNING) state
+    row = await db.fetchone("SELECT status FROM tasks WHERE id = ?", (task_id,))
+    assert row["status"] == TaskStatus.RUNNING.value
+    mock_pm.return_value.build_command.assert_not_called()
     await db.disconnect()
 
 
@@ -860,10 +917,10 @@ async def test_execute_modular_scanner(setup_test_environment):
 async def test_execute_standard_scanner(setup_test_environment):
     await init_db(settings.database_path)
     db = await get_db()
-    
+
     task_id = str(uuid.uuid4())
     owner_id = str(uuid.uuid4())
-    
+
     # Insert task in DB
     await db.execute(
         """
@@ -874,19 +931,19 @@ async def test_execute_standard_scanner(setup_test_environment):
     )
 
     executor = TaskExecutor()
-    
+
     mock_plugin = MagicMock()
     mock_plugin.id = "mock_cli_plugin"
     mock_plugin.name = "mock_cli_plugin"
     mock_plugin.docker_image = None
-    
+
     with patch("backend.secuscan.executor.get_plugin_manager") as mock_pm, \
          patch.object(executor, "_execute_command", return_value=("Mock output\n", 0)) as mock_exec, \
          patch.object(executor, "_classify_command_result", return_value=(TaskStatus.COMPLETED.value, None)) as mock_classify, \
          patch.object(executor, "_upsert_findings_and_report") as mock_upsert:
-        
+
         mock_pm.return_value.build_command.return_value = ["ping", "127.0.0.1"]
-        
+
         status, duration, exit_code = await executor._execute_standard_scanner(
             db=db,
             task_id=task_id,
@@ -909,3 +966,37 @@ async def test_execute_standard_scanner(setup_test_environment):
     await db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_execute_task_aborts_when_task_deleted_before_running(setup_test_environment):
+    """
+    When the task row is deleted before execute_task runs the optimistic
+    UPDATE, the rowcount will be 0 and the method must abort gracefully.
+    """
+    await init_db(settings.database_path)
+    db = await get_db()
+
+    task_id = str(uuid.uuid4())
+    await db.execute(
+        """
+        INSERT INTO tasks (id, plugin_id, tool_name, target, inputs_json,
+                           status, consent_granted, safe_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (task_id, "nmap", "nmap", "127.0.0.1", '{"target":"127.0.0.1"}',
+         TaskStatus.QUEUED.value, 1, 1)
+    )
+
+    executor = TaskExecutor()
+
+    with patch("backend.secuscan.executor.get_plugin_manager") as mock_pm, \
+         patch("backend.secuscan.executor.concurrent_limiter") as mock_limiter:
+        mock_limiter.release = AsyncMock()
+        mock_pm.return_value.get_plugin.return_value = MagicMock(name="nmap", presets={})
+
+        # Delete the task before execute_task can update it
+        await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+        await executor.execute_task(task_id)
+
+    assert task_id not in executor.running_tasks
+    await db.disconnect()

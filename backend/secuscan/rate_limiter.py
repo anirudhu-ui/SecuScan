@@ -25,6 +25,10 @@ from fastapi import HTTPException, Request, status
 logger = logging.getLogger(__name__)
 
 
+class RateLimitExceeded(HTTPException):
+    """Raised when a rate limit is exceeded. Caught by a global exception handler."""
+
+
 class ScanRateLimiter:
     """
     Sliding window rate limiter for scan execution endpoints.

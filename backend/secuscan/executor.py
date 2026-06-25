@@ -231,9 +231,19 @@ class TaskExecutor:
         """Broadcast a scan phase transition and persist it to the database."""
         await self._broadcast(task_id, "phase", phase)
         db = await get_db()
+        now = datetime.now(timezone.utc).isoformat()
         await db.execute(
-            "UPDATE tasks SET scan_phase = ? WHERE id = ?",
-            (phase, task_id)
+            """
+            UPDATE tasks
+            SET scan_phase = ?,
+                phase_timestamps_json = json_set(
+                    phase_timestamps_json,
+                    '$.' || COALESCE(scan_phase, 'unknown') || '.completed_at', ?,
+                    '$.' || ? || '.started_at', ?
+                )
+            WHERE id = ?
+            """,
+            (phase, now, phase, now, task_id)
         )
 
     async def create_task(
@@ -281,8 +291,8 @@ class TaskExecutor:
             """
             INSERT INTO tasks (
                 id, owner_id, plugin_id, tool_name, target, inputs_json, preset,
-                execution_context_json, status, scan_phase, consent_granted, safe_mode
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                execution_context_json, status, scan_phase, phase_timestamps_json, consent_granted, safe_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -295,6 +305,7 @@ class TaskExecutor:
                 serialize_execution_context(execution_context),
                 TaskStatus.QUEUED.value,
                 ScanPhase.QUEUED.value,
+                json.dumps({ScanPhase.QUEUED.value: {"started_at": datetime.now(timezone.utc).isoformat()}}),
                 consent_granted,
                 bool(safe_mode)
             )
@@ -1025,7 +1036,7 @@ class TaskExecutor:
         db = await get_db()
         task_row = await db.fetchone(
             """
-            SELECT id, plugin_id, tool_name, target, status, scan_phase, created_at, started_at, completed_at,
+            SELECT id, plugin_id, tool_name, target, status, scan_phase, phase_timestamps_json, created_at, started_at, completed_at,
                    duration_seconds, exit_code, error_message, preset, inputs_json, execution_context_json
             FROM tasks WHERE id = ?
             """,
@@ -1046,6 +1057,11 @@ class TaskExecutor:
             pending_count = len(ids)
             queue_position = (ids.index(task_id) + 1) if task_id in ids else None
 
+        try:
+            phase_timestamps = json.loads(_row_value(task_row, "phase_timestamps_json", "{}"))
+        except json.JSONDecodeError:
+            phase_timestamps = {}
+
         return {
             "task_id": task_row["id"],
             "plugin_id": task_row["plugin_id"],
@@ -1053,6 +1069,7 @@ class TaskExecutor:
             "target": task_row["target"],
             "status": task_row["status"],
             "scan_phase": task_row.get("scan_phase"),
+            "phase_timestamps": phase_timestamps,
             "created_at": task_row["created_at"],
             "started_at": task_row["started_at"],
             "completed_at": task_row["completed_at"],

@@ -67,6 +67,7 @@ class Database:
                 preset TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 scan_phase TEXT,
+                phase_timestamps_json TEXT NOT NULL DEFAULT '{}',
                 consent_granted BOOLEAN NOT NULL DEFAULT 0,
                 safe_mode BOOLEAN NOT NULL DEFAULT 1,
                 created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
@@ -421,6 +422,7 @@ ON credential_vault(owner_id);
             "execution_context_json": "TEXT NOT NULL DEFAULT '{}'",
             "preset": "TEXT",
             "safe_mode": "BOOLEAN NOT NULL DEFAULT 1",
+            "phase_timestamps_json": "TEXT NOT NULL DEFAULT '{}'"
         }
 
         for col_name, col_type in needed_cols.items():
